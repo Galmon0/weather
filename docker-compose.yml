@@ -1,0 +1,65 @@
+name: weather   # имя проекта задаём явно: папка называется кириллицей, иначе compose ругается
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: weather
+      POSTGRES_PASSWORD: weather
+      POSTGRES_DB: weather
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d:ro   # schema.sql применится при первом старте
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weather -d weather"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  loader:
+    build: .
+    command: python -m weather.scheduler
+    environment:
+      DATABASE_URL: postgresql+psycopg2://weather:weather@db:5432/weather
+      SCHEDULE_HOUR: ${SCHEDULE_HOUR:-5}
+      SCHEDULE_MINUTE: ${SCHEDULE_MINUTE:-30}
+    volumes:                       # живой код: правки парсера/ETL/прогноза без пересборки
+      - ./weather:/app/weather
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app:
+    build: .
+    command: streamlit run app/streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+    environment:
+      DATABASE_URL: postgresql+psycopg2://weather:weather@db:5432/weather
+    volumes:                       # живой код: правки UI без пересборки образа
+      - ./app:/app/app
+      - ./weather:/app/weather
+    ports:
+      - "8501:8501"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: uvicorn weather.api:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql+psycopg2://weather:weather@db:5432/weather
+    volumes:
+      - ./weather:/app/weather
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
