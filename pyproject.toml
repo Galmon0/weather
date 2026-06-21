@@ -8,3 +8,4 @@ ignore = ["E501"]   # длинные строки (русские коммент
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]   # чтобы `pytest` (как в CI) находил пакет weather, а не только `python -m pytest`
