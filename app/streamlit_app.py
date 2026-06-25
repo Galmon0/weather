@@ -11,7 +11,7 @@ import plotly.express as px
 import streamlit as st
 from sqlalchemy import text
 
-from weather import db
+from weather import db, forecast, models
 
 st.set_page_config(page_title="Погода России", layout="wide")
 APP_DIR = Path(__file__).resolve().parent
@@ -65,6 +65,12 @@ def load_forecasts() -> pd.DataFrame:
 def load_eval() -> pd.DataFrame:
     return pd.read_sql("SELECT station_code, eval_date, model, abs_error FROM forecast_eval",
                        get_engine())
+
+
+@st.cache_data(ttl=300)
+def load_daily_city(code: str) -> pd.DataFrame:
+    """Суточный ряд (tavg/tmin/tmax/pressure/humidity) для конструктора моделей."""
+    return forecast._load_daily(get_engine(), code)
 
 
 @st.cache_data(ttl=300)
@@ -279,3 +285,43 @@ else:
     st.plotly_chart(px.line(series, x="ts", y="humidity_pct", title="Влажность, %"),
                     width="stretch")
     st.dataframe(series.tail(24), width="stretch")
+
+
+# --- Конструктор модели ---
+st.subheader("🛠 Конструктор модели")
+st.caption("Собери свою модель: город, тип модели, цель и набор признаков — "
+           "график (факт / модель / персистенс) и прогноз пересчитаются вживую.")
+kc1, kc2, kc3 = st.columns(3)
+con_city = kc1.selectbox("Город", city_options, index=default_idx, key="con_city")
+con_code = stations.loc[stations["city"] == con_city, "code"].iloc[0]
+con_model = kc2.selectbox("Модель", list(models.MODELS), key="con_model")
+con_target = kc3.selectbox("Цель", models.TARGETS, key="con_target")
+con_feats = st.multiselect("Признаки в модели", models.ALL_FEATURES,
+                           default=models.ALL_FEATURES, key="con_feats")
+
+if not con_feats:
+    st.warning("Выбери хотя бы один признак.")
+else:
+    daily = load_daily_city(con_code)
+    try:
+        res = models.backtest(daily, con_model, con_feats, con_target)
+    except Exception as e:
+        st.error(f"Не удалось обучить модель: {e}")
+        res = None
+    if res is None:
+        st.info("Мало данных по этому городу для обучения.")
+    else:
+        b1, b2, b3 = st.columns(3)
+        b1.metric(f"MAE — {con_model}", f"{res['mae_model']:.2f} °C")
+        b2.metric("MAE — персистенс", f"{res['mae_persist']:.2f} °C")
+        b3.metric("Модель vs персистенс", f"{res['mae_persist'] - res['mae_model']:+.2f} °C",
+                  help="Плюс = выбранная модель точнее наивного baseline")
+        plot = pd.DataFrame({"дата": res["dates"], "факт": res["actual"],
+                             con_model: res["pred"], "персистенс": res["persist"]})
+        long = plot.melt("дата", var_name="ряд", value_name="°C")
+        figk = px.line(long, x="дата", y="°C", color="ряд",
+                       title=f"{con_target} в «{con_city}»: факт vs {con_model} vs персистенс "
+                             f"(тест {res['n_test']} дн.)")
+        st.plotly_chart(figk, width="stretch")
+        st.success(f"Прогноз **{con_target}** на {res['tomorrow_date']}: "
+                   f"**{res['tomorrow']:.1f} °C**  ·  модель {con_model}, признаков: {len(con_feats)}")
