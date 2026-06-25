@@ -51,12 +51,16 @@ def load_latest() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_forecasts() -> pd.DataFrame:
+    # последний прогноз по каждому городу и модели (даты по городам могут
+    # отличаться из-за локального времени станций — поэтому не фильтруем по
+    # одной max-дате, иначе видны только восточные города)
     q = """
-        SELECT f.station_code, s.city, f.target_date, f.model,
+        SELECT DISTINCT ON (f.station_code, f.model)
+               f.station_code, s.city, f.target_date, f.model,
                f.predicted_tmin, f.predicted_tavg, f.predicted_tmax
         FROM forecasts f
         JOIN stations s ON s.code = f.station_code
-        WHERE f.target_date = (SELECT max(target_date) FROM forecasts)
+        ORDER BY f.station_code, f.model, f.target_date DESC
     """
     return pd.read_sql(q, get_engine())
 

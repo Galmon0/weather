@@ -58,7 +58,14 @@ def _features(g: pd.DataFrame) -> pd.DataFrame:
     d["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
     d["tavg_lag1"] = d["tavg"].shift(1)
     d["tavg_lag2"] = d["tavg"].shift(2)
-    d["dpressure"] = d["pressure"].diff()          # барическая тенденция
+    # давление/влажность у части станций бывают пустыми (особенно в свежих днях);
+    # заполняем, иначе dropna по признакам выкидывает все строки и город выпадает
+    # из прогноза целиком либо получает прогноз на устаревшую дату.
+    for col in ("pressure", "humidity"):
+        d[col] = d[col].ffill().bfill()
+        if d[col].isna().all():
+            d[col] = 0.0
+    d["dpressure"] = d["pressure"].diff().fillna(0.0)   # барическая тенденция
     for col in FEATS + TARGETS:
         if col in d:
             d[col] = d[col].astype("float64")
