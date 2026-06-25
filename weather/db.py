@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,20 @@ from . import config
 
 def get_engine() -> Engine:
     return create_engine(config.DATABASE_URL, pool_pre_ping=True, future=True)
+
+
+def wait_for_db(retries: int = 30, delay: float = 2.0) -> Engine:
+    """Дождаться готовности Postgres — страховка от гонки при рестарте Docker
+    (loader может стартовать раньше, чем поднимется контейнер db)."""
+    eng = get_engine()
+    for _ in range(retries):
+        try:
+            with eng.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return eng
+        except Exception:
+            time.sleep(delay)
+    raise RuntimeError("БД не поднялась за отведённое время")
 
 
 def load_stations_csv() -> pd.DataFrame:

@@ -11,6 +11,7 @@ import logging
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from . import config
+from .db import wait_for_db
 from .load import run_once
 from .forecast import run as run_forecast
 from .evaluate import run as run_evaluate
@@ -32,6 +33,11 @@ def daily_job() -> None:
 
 
 def main() -> None:
+    log.info("ожидаю готовности БД...")
+    try:
+        wait_for_db()
+    except Exception as e:
+        log.warning("БД недоступна: %r", e)
     log.info("стартовый прогон...")
     try:
         daily_job()
