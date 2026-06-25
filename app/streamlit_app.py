@@ -289,14 +289,17 @@ else:
 
 # --- Конструктор модели ---
 st.subheader("🛠 Конструктор модели")
-st.caption("Собери свою модель: город, тип модели, цель и набор признаков — "
-           "график (факт / модель / персистенс) и прогноз пересчитаются вживую.")
+st.caption("Сравни две модели бок о бок: выбери город, цель, признаки и **две модели** — "
+           "график (факт / A / B) и прогнозы пересчитаются вживую.")
 kc1, kc2, kc3 = st.columns(3)
 con_city = kc1.selectbox("Город", city_options, index=default_idx, key="con_city")
 con_code = stations.loc[stations["city"] == con_city, "code"].iloc[0]
-con_model = kc2.selectbox("Модель", list(models.MODELS), key="con_model")
-con_target = kc3.selectbox("Цель", models.TARGETS, key="con_target")
-con_feats = st.multiselect("Признаки в модели", models.ALL_FEATURES,
+con_target = kc2.selectbox("Цель", models.TARGETS, key="con_target")
+mlist = list(models.MODELS)
+mcol_a, mcol_b = st.columns(2)
+model_a = mcol_a.selectbox("Модель A", mlist, index=0, key="con_model_a")
+model_b = mcol_b.selectbox("Модель B", mlist, index=min(1, len(mlist) - 1), key="con_model_b")
+con_feats = st.multiselect("Признаки в моделях", models.ALL_FEATURES,
                            default=models.ALL_FEATURES, key="con_feats")
 
 if not con_feats:
@@ -304,40 +307,38 @@ if not con_feats:
 else:
     daily = load_daily_city(con_code)
     try:
-        res = models.backtest(daily, con_model, con_feats, con_target)
+        ra = models.backtest(daily, model_a, con_feats, con_target)
+        rb = models.backtest(daily, model_b, con_feats, con_target)
     except Exception as e:
-        st.error(f"Не удалось обучить модель: {e}")
-        res = None
-    if res is None:
+        st.error(f"Не удалось обучить: {e}")
+        ra = rb = None
+    if not ra or not rb:
         st.info("Мало данных по этому городу для обучения.")
     else:
-        b1, b2, b3 = st.columns(3)
-        b1.metric(f"MAE — {con_model}", f"{res['mae_model']:.2f} °C")
-        b2.metric("MAE — персистенс", f"{res['mae_persist']:.2f} °C")
-        b3.metric("Модель vs персистенс", f"{res['mae_persist'] - res['mae_model']:+.2f} °C",
-                  help="Плюс = выбранная модель точнее наивного baseline")
-        plot = pd.DataFrame({"дата": res["dates"], "факт": res["actual"],
-                             con_model: res["pred"], "персистенс": res["persist"]})
+        winner = model_a if ra["mae_model"] <= rb["mae_model"] else model_b
+        q1, q2, q3, q4 = st.columns(4)
+        q1.metric(f"MAE — {model_a}", f"{ra['mae_model']:.2f} °C")
+        q2.metric(f"MAE — {model_b}", f"{rb['mae_model']:.2f} °C")
+        q3.metric("персистенс (ref)", f"{ra['mae_persist']:.2f} °C")
+        q4.metric(f"{model_a} − {model_b}", f"{ra['mae_model'] - rb['mae_model']:+.2f} °C",
+                  help="Минус = модель A точнее B")
+        plot = pd.DataFrame({"дата": ra["dates"], "факт": ra["actual"],
+                             f"A · {model_a}": ra["pred"], f"B · {model_b}": rb["pred"]})
         long = plot.melt("дата", var_name="ряд", value_name="°C")
         figk = px.line(long, x="дата", y="°C", color="ряд",
-                       title=f"{con_target} в «{con_city}»: факт vs {con_model} vs персистенс "
-                             f"(тест {res['n_test']} дн.)")
+                       title=f"{con_target} в «{con_city}»: факт vs {model_a} vs {model_b} "
+                             f"(тест {ra['n_test']} дн.)")
         st.plotly_chart(figk, width="stretch")
-        st.success(f"Прогноз **{con_target}** на {res['tomorrow_date']}: "
-                   f"**{res['tomorrow']:.1f} °C**  ·  модель {con_model}, признаков: {len(con_feats)}")
+        st.success(f"Прогноз **{con_target}** на {ra['tomorrow_date']}:  "
+                   f"**{model_a}** → {ra['tomorrow']:.1f} °C   ·   "
+                   f"**{model_b}** → {rb['tomorrow']:.1f} °C   ·   точнее здесь: **{winner}**")
 
-    # сравнение всех моделей разом (на выбранном городе / цели / наборе признаков)
-    st.markdown("**Сравнение всех моделей** — кто точнее на этих данных:")
-    cmp = models.compare_models(daily, con_feats, con_target)
-    if cmp is None:
-        st.info("Мало данных для сравнения.")
-    else:
-        colors = {m: ("#9aa0a6" if m == "Персистенс" else "#4c8bf5") for m in cmp["model"]}
-        fig_cmp = px.bar(cmp, x="model", y="MAE", color="model", color_discrete_map=colors,
-                         title=f"MAE моделей — {con_target} в «{con_city}» (меньше = точнее)",
-                         labels={"MAE": "MAE, °C", "model": "модель"})
-        fig_cmp.update_layout(showlegend=False, height=380)
-        st.plotly_chart(fig_cmp, width="stretch")
-        best = cmp.iloc[0]
-        st.caption(f"Лучшая здесь: **{best['model']}** (MAE {best['MAE']:.2f} °C). "
-                   f"Серый бар «Персистенс» — наивный baseline; всё, что ниже него, его обыгрывает.")
+        with st.expander("📊 Все модели разом (bar-чарт)"):
+            cmp = models.compare_models(daily, con_feats, con_target)
+            if cmp is not None:
+                colors = {m: ("#9aa0a6" if m == "Персистенс" else "#4c8bf5") for m in cmp["model"]}
+                fig_cmp = px.bar(cmp, x="model", y="MAE", color="model", color_discrete_map=colors,
+                                 title=f"MAE моделей — {con_target} в «{con_city}» (меньше = точнее)",
+                                 labels={"MAE": "MAE, °C", "model": "модель"})
+                fig_cmp.update_layout(showlegend=False, height=360)
+                st.plotly_chart(fig_cmp, width="stretch")
