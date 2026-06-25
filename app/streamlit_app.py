@@ -325,3 +325,19 @@ else:
         st.plotly_chart(figk, width="stretch")
         st.success(f"Прогноз **{con_target}** на {res['tomorrow_date']}: "
                    f"**{res['tomorrow']:.1f} °C**  ·  модель {con_model}, признаков: {len(con_feats)}")
+
+    # сравнение всех моделей разом (на выбранном городе / цели / наборе признаков)
+    st.markdown("**Сравнение всех моделей** — кто точнее на этих данных:")
+    cmp = models.compare_models(daily, con_feats, con_target)
+    if cmp is None:
+        st.info("Мало данных для сравнения.")
+    else:
+        colors = {m: ("#9aa0a6" if m == "Персистенс" else "#4c8bf5") for m in cmp["model"]}
+        fig_cmp = px.bar(cmp, x="model", y="MAE", color="model", color_discrete_map=colors,
+                         title=f"MAE моделей — {con_target} в «{con_city}» (меньше = точнее)",
+                         labels={"MAE": "MAE, °C", "model": "модель"})
+        fig_cmp.update_layout(showlegend=False, height=380)
+        st.plotly_chart(fig_cmp, width="stretch")
+        best = cmp.iloc[0]
+        st.caption(f"Лучшая здесь: **{best['model']}** (MAE {best['MAE']:.2f} °C). "
+                   f"Серый бар «Персистенс» — наивный baseline; всё, что ниже него, его обыгрывает.")

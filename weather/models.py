@@ -75,3 +75,34 @@ def backtest(daily: pd.DataFrame, model_name: str, features: list[str],
         "mae_persist": float(mean_absolute_error(actual, persist)),
         "tomorrow": tomorrow, "tomorrow_date": tdate, "n_test": len(te),
     }
+
+
+def compare_models(daily: pd.DataFrame, features: list[str],
+                   target: str = "tavg", eval_days: int = 60) -> pd.DataFrame | None:
+    """MAE каждой модели + персистенс на одном городе/цели/наборе признаков.
+
+    Для бар-чарта «разница между моделями» в конструкторе. Возвращает DataFrame
+    (model, MAE), отсортированный по возрастанию ошибки, либо None.
+    """
+    features = list(features)
+    if not features:
+        return None
+    d = _features(daily)
+    d["__target"] = d[target].shift(-1)
+    work = d.dropna(subset=features + ["__target"])
+    if len(work) < 50:
+        return None
+    test_n = min(eval_days, len(work) - 40)
+    if test_n < 5:
+        return None
+
+    tr, te = work.iloc[:-test_n], work.iloc[-test_n:]
+    actual = te["__target"].to_numpy()
+    rows = [{"model": "Персистенс",
+             "MAE": float(mean_absolute_error(actual, te[target].to_numpy()))}]
+    for name in MODELS:
+        m = make_model(name)
+        m.fit(tr[features], tr["__target"])
+        rows.append({"model": name,
+                     "MAE": float(mean_absolute_error(actual, m.predict(te[features])))})
+    return pd.DataFrame(rows).sort_values("MAE").reset_index(drop=True)
