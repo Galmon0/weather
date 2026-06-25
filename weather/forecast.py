@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Прогноз температуры на завтра (tavg/tmin/tmax) + честная оценка против baseline.
 
-Читает наблюдения из БД, агрегирует в суточные ряды, обучает по модели на каждую
-цель (GradientBoosting) и пишет прогноз в таблицу forecasts. Рядом всегда пишется
-baseline-персистенс «завтра = сегодня» — чтобы по метрикам было честно видно,
-обыгрывает ли модель наивный прогноз.
+Читает наблюдения из БД, агрегирует в суточные ряды, обучает НЕСКОЛЬКО моделей
+(реестр weather/models.py) на каждую цель и пишет прогноз каждой модели в таблицу
+forecasts. Рядом пишется baseline-персистенс «завтра = сегодня». Это даёт выбор
+модели прямо в таблице прогноза приложения.
 
 Замечание (показано прототипом на истории 2025–2026): для горизонта в 1 день
 персистенс очень силён (MAE ~1.5–2.8 °C). Чтобы стабильно его обыгрывать, нужно
@@ -102,38 +102,47 @@ def _predict_tomorrow(d: pd.DataFrame, target_col: str):
 
 def run(engine: Engine | None = None) -> int:
     engine = engine or db.get_engine()
+    from . import models  # ленивый импорт: реестр моделей зависит от _features (избегаем цикла)
+
     stations = db.load_stations_csv()
+    model_names = list(models.MODELS)
     rows = []
     for st in stations.itertuples(index=False):
         g = _load_daily(engine, st.code)
         if g.empty or len(g.dropna(subset=["tavg"])) < MIN_DAYS:
-            log.info("%-18s %-7s мало данных для прогноза", st.city, st.code)
             continue
         d = _features(g)
-
-        preds, last_day = {}, None
-        for tgt in TARGETS:
-            ev = _eval(d, tgt)
-            pr = _predict_tomorrow(d, tgt)
-            if ev and pr:
-                mae_m, mae_p, n = ev
-                verdict = "лучше" if mae_m < mae_p else "хуже"
-                log.info("%-18s %-4s модель MAE=%.2f / персистенс MAE=%.2f (%s, n=%d)",
-                         st.city, tgt, mae_m, mae_p, verdict, n)
-                preds[tgt], last_day = pr[0], pr[1]
-
-        if not preds:
+        feat_rows = d.dropna(subset=FEATS)
+        if feat_rows.empty:
             continue
-        target_date = (last_day + pd.Timedelta(days=1)).date()
-        last_obs = d.loc[last_day]
-        rows.append({"station_code": st.code, "target_date": target_date, "model": "gbr",
-                     "predicted_tavg": preds.get("tavg"), "predicted_tmin": preds.get("tmin"),
-                     "predicted_tmax": preds.get("tmax")})
-        # baseline-персистенс на ту же дату — для честного сравнения в БД
-        rows.append({"station_code": st.code, "target_date": target_date, "model": "persistence",
-                     "predicted_tavg": float(last_obs["tavg"]),
-                     "predicted_tmin": float(last_obs["tmin"]),
-                     "predicted_tmax": float(last_obs["tmax"])})
+        last = feat_rows.iloc[[-1]]
+        target_date = (last.index[-1] + pd.Timedelta(days=1)).date()
+
+        predicted = {name: {} for name in model_names}   # модель -> {цель: значение}
+        persist = {}
+        for tgt in TARGETS:
+            work = d.copy()
+            work["target"] = work[tgt].shift(-1)
+            train = work.dropna(subset=FEATS + ["target"])
+            if len(train) < MIN_DAYS:
+                continue
+            persist[tgt] = float(last[tgt].iloc[0])      # персистенс = сегодняшнее значение
+            for name in model_names:
+                m = models.make_model(name)
+                m.fit(train[FEATS], train["target"])
+                predicted[name][tgt] = float(m.predict(last[FEATS])[0])
+
+        if not persist:
+            continue
+        for name in model_names:
+            v = predicted[name]
+            rows.append({"station_code": st.code, "target_date": target_date, "model": name,
+                         "predicted_tavg": v.get("tavg"), "predicted_tmin": v.get("tmin"),
+                         "predicted_tmax": v.get("tmax")})
+        rows.append({"station_code": st.code, "target_date": target_date, "model": "Персистенс",
+                     "predicted_tavg": persist.get("tavg"), "predicted_tmin": persist.get("tmin"),
+                     "predicted_tmax": persist.get("tmax")})
+        log.info("%-18s %-7s прогноз по %d моделям + персистенс", st.city, st.code, len(model_names))
 
     written = db.upsert_forecasts(engine, pd.DataFrame(rows))
     log.info("прогнозов записано/обновлено: %d", written)

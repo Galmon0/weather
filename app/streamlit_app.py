@@ -212,16 +212,18 @@ except Exception:
 if fc.empty:
     st.info("Прогноз ещё не рассчитан (идёт бэкафилл/первый прогон).")
 else:
-    gbr = fc[fc["model"] == "gbr"].copy()
+    model_opts = sorted(fc["model"].unique())
+    default_m = model_opts.index("GradientBoosting") if "GradientBoosting" in model_opts else 0
+    fc_model = st.selectbox("Модель прогноза", model_opts, index=default_m, key="fc_model")
+    sel = fc[fc["model"] == fc_model].copy()
     if chosen:
-        gbr = gbr[gbr["station_code"].isin(chosen)]
+        sel = sel[sel["station_code"].isin(chosen)]
         names = ", ".join(stations.loc[stations["code"].isin(chosen), "city"])
-        st.caption(f"Выбрано: **{len(chosen)}** ({names}). Модель — GradientBoosting; "
-                   f"рядом в БД baseline-персистенс.")
+        st.caption(f"Модель: **{fc_model}** · выбрано {len(chosen)} ({names}).")
     else:
-        st.caption(f"Показаны все {gbr['station_code'].nunique()} городов. "
+        st.caption(f"Модель: **{fc_model}** · показаны все {sel['station_code'].nunique()} городов. "
                    f"Выдели нужные на карте или в списке.")
-    table = (gbr[["city", "target_date", "predicted_tmin", "predicted_tavg", "predicted_tmax"]]
+    table = (sel[["city", "target_date", "predicted_tmin", "predicted_tavg", "predicted_tmax"]]
              .rename(columns={"target_date": "дата", "predicted_tmin": "tmin, °C",
                               "predicted_tavg": "tavg, °C", "predicted_tmax": "tmax, °C"})
              .sort_values("city"))
