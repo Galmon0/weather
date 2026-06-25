@@ -204,6 +204,7 @@ st.subheader("Прогноз на завтра")
 extra_cities = st.multiselect("Города (или выдели на карте выше)", stations["city"].tolist(), default=[])
 extra_codes = stations.loc[stations["city"].isin(extra_cities), "code"].tolist()
 chosen = list(dict.fromkeys(sel_codes + extra_codes))
+fc_model = "GradientBoosting"   # дефолт; переопределяется селектором ниже
 
 try:
     fc = load_forecasts()
@@ -242,26 +243,29 @@ if ev.empty:
 else:
     if chosen:
         ev = ev[ev["station_code"].isin(chosen)]
+    keep = [fc_model, "Персистенс"] if fc_model != "Персистенс" else ["Персистенс"]
+    ev = ev[ev["model"].isin(keep)]
     if ev.empty:
-        st.info("Нет оценок для выбранных городов.")
+        st.info("Нет оценок для выбранной модели / городов.")
     else:
         daily = ev.groupby(["eval_date", "model"])["abs_error"].mean().reset_index()
         fig_e = px.line(daily, x="eval_date", y="abs_error", color="model",
                         labels={"abs_error": "|ошибка| tavg, °C", "eval_date": "дата", "model": "модель"},
-                        title="Средняя абсолютная ошибка прогноза tavg по дням")
+                        title=f"Ошибка прогноза tavg по дням — {fc_model} vs персистенс")
         st.plotly_chart(fig_e, width="stretch")
         overall = ev.groupby("model")["abs_error"].mean()
-        mae_g, mae_p = overall.get("gbr"), overall.get("persistence")
+        mae_m, mae_p = overall.get(fc_model), overall.get("Персистенс")
         k1, k2, k3 = st.columns(3)
-        if mae_g is not None:
-            k1.metric("MAE модели (GBR)", f"{mae_g:.2f} °C")
+        if mae_m is not None:
+            k1.metric(f"MAE — {fc_model}", f"{mae_m:.2f} °C")
         if mae_p is not None:
-            k2.metric("MAE персистенса", f"{mae_p:.2f} °C")
-        if mae_g is not None and mae_p is not None:
-            k3.metric("Модель vs персистенс", f"{mae_p - mae_g:+.2f} °C",
-                      help="Плюс = модель точнее baseline")
-        st.caption("Бэктест: модель училась на истории до окна и предсказывала каждый его день. "
-                   "Фильтруется выбором городов на карте.")
+            k2.metric("MAE — персистенс", f"{mae_p:.2f} °C")
+        if mae_m is not None and mae_p is not None:
+            k3.metric(f"{fc_model} vs персистенс", f"{mae_p - mae_m:+.2f} °C",
+                      help="Плюс = выбранная модель точнее baseline")
+        st.caption(f"Бэктест модели **{fc_model}** (меняется селектором «Модель прогноза» выше): "
+                   f"училась на истории до окна и предсказывала каждый его день. "
+                   f"Фильтруется и выбором городов на карте.")
 
 # --- Город подробнее ---
 st.subheader("Город подробнее")
